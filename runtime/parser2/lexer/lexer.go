@@ -54,6 +54,8 @@ type position struct {
 
 type lexer struct {
 	ctx context.Context
+	// the function that cancels the lexer
+	cancelLexer func()
 	// the entire input string
 	input string
 	// the start offset of the current word in the current line
@@ -74,9 +76,44 @@ type lexer struct {
 	startPos position
 }
 
-func Lex(ctx context.Context, input string) chan Token {
+type TokenStream interface {
+	Next() Token
+	Close(*[]error)
+	Code() string
+}
+
+func (l *lexer) Next() Token {
+	token, ok := <-l.tokens
+	if !ok {
+		pos := ast.Position{
+			Offset: l.endOffset - 1,
+			Line:   l.endPos().line,
+			Column: l.endPos().column - 1,
+		}
+		token = Token{
+			Type: TokenEOF,
+			Range: ast.Range{
+				StartPos: pos,
+				EndPos:   pos,
+			},
+		}
+	}
+	return token
+}
+
+func (l *lexer) Close(_ *[]error) {
+	l.cancelLexer()
+}
+
+func (l *lexer) Code() string {
+	return l.input
+}
+
+func Lex(input string) TokenStream {
+	ctx, cancelLexer := context.WithCancel(context.Background())
 	l := &lexer{
 		ctx:           ctx,
+		cancelLexer:   cancelLexer,
 		input:         input,
 		startPos:      position{line: 1},
 		endOffset:     0,
@@ -86,7 +123,7 @@ func Lex(ctx context.Context, input string) chan Token {
 		tokens:        make(chan Token),
 	}
 	go l.run(rootState)
-	return l.tokens
+	return l
 }
 
 type done struct{}
